@@ -45,6 +45,36 @@ function ago(ts) {
   if(d<86400) return `${Math.floor(d/3600)}h ago`;
   return `${Math.floor(d/86400)}d ago`;
 }
+// Compress + resize any image to max 1200px / 0.82 quality before storing.
+// This prevents blank pages from large files overflowing localStorage or stalling the UI.
+function compressImage(file, maxPx=1200, quality=0.82) {
+  return new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onerror = rej;
+    reader.onload = ev => {
+      const img = new Image();
+      img.onerror = rej;
+      img.onload = () => {
+        try {
+          // Work out new dimensions keeping aspect ratio
+          let {width:w, height:h} = img;
+          if (w > maxPx || h > maxPx) {
+            if (w >= h) { h = Math.round(h * maxPx / w); w = maxPx; }
+            else        { w = Math.round(w * maxPx / h); h = maxPx; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+          res(canvas.toDataURL("image/jpeg", quality));
+        } catch(e) { rej(e); }
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+// Keep readFile for non-image uses
 function readFile(file) {
   return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsDataURL(file); });
 }
@@ -455,10 +485,17 @@ function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
     const f = e.target.files?.[0];
     if (!f) return;
     try {
-      const d = await readFile(f);
+      // Compress before use — prevents blank pages with large camera/library images
+      const d = await compressImage(f);
       onPick(d);
     } catch(err) {
       console.error("ImagePicker error:", err);
+      // Last-resort fallback: try raw read
+      try {
+        const r = new FileReader();
+        r.onload = ev => onPick(ev.target.result);
+        r.readAsDataURL(f);
+      } catch(e2) { console.error("Fallback read failed:", e2); }
     }
     e.target.value = "";
   }
