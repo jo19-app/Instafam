@@ -218,29 +218,46 @@ function ImageEditor({image,onSave,onCancel}) {
 
   // Flatten to canvas and export
   function exportImage() {
-    const img=new Image(); img.crossOrigin="anonymous";
-    img.onload=()=>{
-      const c=canvasRef.current; c.width=img.width; c.height=img.height;
+    const c=canvasRef.current;
+    const doRender=(imgEl)=>{
+      c.width=imgEl.naturalWidth||imgEl.width||800;
+      c.height=imgEl.naturalHeight||imgEl.height||800;
       const ctx=c.getContext("2d");
-      // Apply filter via CSS then draw — simpler: draw normally, apply filter style
       ctx.filter=FILTERS[filter].css==="none"?"none":FILTERS[filter].css;
-      ctx.drawImage(img,0,0);
+      ctx.drawImage(imgEl,0,0);
       ctx.filter="none";
-      // Draw stickers
       stickers.forEach(s=>{
-        ctx.font=`${s.size*img.width/400}px serif`;
-        ctx.fillText(s.emoji,(s.x/100)*img.width,(s.y/100)*img.height);
+        ctx.font=`${s.size*c.width/400}px serif`;
+        ctx.fillText(s.emoji,(s.x/100)*c.width,(s.y/100)*c.height);
       });
-      // Draw texts
       texts.forEach(t=>{
-        const fs=t.size*img.width/400;
+        const fs=t.size*c.width/400;
         ctx.font=`bold ${fs}px 'Nunito',sans-serif`;
         ctx.fillStyle=t.color;
         ctx.strokeStyle="rgba(0,0,0,0.5)"; ctx.lineWidth=fs*0.08;
-        ctx.strokeText(t.text,(t.x/100)*img.width,(t.y/100)*img.height);
-        ctx.fillText(t.text,(t.x/100)*img.width,(t.y/100)*img.height);
+        ctx.strokeText(t.text,(t.x/100)*c.width,(t.y/100)*c.height);
+        ctx.fillText(t.text,(t.x/100)*c.width,(t.y/100)*c.height);
       });
-      onSave(c.toDataURL("image/jpeg",0.92));
+      try { onSave(c.toDataURL("image/jpeg",0.92)); }
+      catch(e) {
+        // CORS tainted canvas — no text/stickers added, just return original with filter note
+        onSave(image);
+      }
+    };
+    // For base64 data URIs (camera/library picks) — no CORS issue
+    if(image.startsWith("data:")) {
+      const img=new Image();
+      img.onload=()=>doRender(img);
+      img.src=image;
+      return;
+    }
+    // For external URLs — try with crossOrigin, fall back gracefully
+    const img=new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>doRender(img);
+    img.onerror=()=>{
+      // CORS blocked — return original image unchanged
+      onSave(image);
     };
     img.src=image;
   }
@@ -329,19 +346,23 @@ function ImageEditor({image,onSave,onCancel}) {
 
 // ── Image Picker ──────────────────────────────────────────────────────────────
 function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
-  const libRef=useRef(); const camRef=useRef();
-  async function handle(e) { const f=e.target.files?.[0]; if(!f) return; try{const d=await readFile(f);onPick(d);}catch{} }
+  const fileRef=useRef();
+  async function handle(e) {
+    const f=e.target.files?.[0]; if(!f) return;
+    try{ const d=await readFile(f); onPick(d); } catch(err){ console.error("File read error",err); }
+    // Reset so same file can be re-selected
+    e.target.value="";
+  }
   return (
     <div>
-      <input ref={libRef} type="file" accept="image/*" onChange={handle} style={{display:"none"}}/>
-      <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={handle} style={{display:"none"}}/>
-      <button onClick={()=>{libRef.current.value="";libRef.current.click();}}
-        style={{width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,padding:"24px 16px",cursor:"pointer",background:`${P.primary}08`,display:"flex",flexDirection:"column",alignItems:"center",gap:8,marginBottom:10}}>
+      {/* Single input — no capture attr so iOS/Android show native picker with both options */}
+      <input ref={fileRef} type="file" accept="image/*" onChange={handle} style={{display:"none"}}/>
+      <button onClick={()=>{if(fileRef.current){fileRef.current.value="";fileRef.current.click();}}}
+        style={{width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,padding:"24px 16px",cursor:"pointer",background:`${P.primary}08`,display:"flex",flexDirection:"column",alignItems:"center",gap:8,marginBottom:0}}>
         <Icon n="camera" color={P.primary} size={30}/>
         <span style={{fontWeight:700,fontSize:15,color:P.primary}}>{label}</span>
         {hint&&<span style={{fontSize:12,color:P.muted}}>{hint}</span>}
       </button>
-      <button onClick={()=>{camRef.current.value="";camRef.current.click();}} style={{...S.ghost,width:"100%",fontSize:13,padding:"9px 0"}}>📷 Take Photo</button>
     </div>
   );
 }
@@ -360,7 +381,7 @@ function UploadModal({groupId,myId,onPost,onStory,onClose}) {
     onClose();
   }
 
-  if(editing && image) return <ImageEditor image={image} onSave={d=>{setEditedImage(d);setEditing(false);}} onCancel={()=>setEditing(false)}/>;
+  if(editing) return <ImageEditor image={image||''} onSave={d=>{setEditedImage(d);setEditing(false);}} onCancel={()=>setEditing(false)}/>;
 
   return (
     <div style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"flex-end"}}>
@@ -387,7 +408,7 @@ function UploadModal({groupId,myId,onPost,onStory,onClose}) {
         ):(
           <div style={{marginBottom:16}}>
             <ImagePicker onPick={setImage} hint="Only visible to this group"/>
-            <button onClick={()=>setImage(PHOTOS[Math.floor(Math.random()*PHOTOS.length)])} style={{...S.ghost,width:"100%",fontSize:13,padding:"9px 0",marginTop:8}}>🖼 Use Sample Photo</button>
+            <button onClick={()=>setImage(PHOTOS[Math.floor(Math.random()*PHOTOS.length)])} style={{...S.ghost,width:"100%",fontSize:13,padding:"9px 0",marginTop:10}}>🖼 Use Sample Photo</button>
           </div>
         )}
         {tab==="post"&&<textarea value={caption} onChange={e=>setCaption(e.target.value)} placeholder="Write a caption…" style={{...S.input,minHeight:80,resize:"none",marginBottom:16}}/>}
@@ -424,12 +445,15 @@ function PostCard({post,members,myId,onLike,onComment,onAvatarClick,onDelete}) {
               <Icon n="more" color={P.muted} size={20}/>
             </button>
             {confirmDel&&(
-              <div style={{position:"absolute",right:0,top:32,background:P.card,borderRadius:14,boxShadow:"0 4px 20px rgba(0,0,0,0.15)",border:`1px solid ${P.border}`,zIndex:50,minWidth:140}}>
-                <button onClick={()=>{onDelete(post.id);setConfirmDel(false);}}
-                  style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"12px 16px",color:"#c0392b",fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:14,textAlign:"left",display:"flex",alignItems:"center",gap:8}}>
-                  <Icon n="trash" color="#c0392b" size={16}/> Delete Post
-                </button>
-              </div>
+              <>
+                <div style={{position:"fixed",inset:0,zIndex:49}} onClick={()=>setConfirmDel(false)}/>
+                <div style={{position:"absolute",right:0,top:32,background:P.card,borderRadius:14,boxShadow:"0 4px 20px rgba(0,0,0,0.15)",border:`1px solid ${P.border}`,zIndex:50,minWidth:140}}>
+                  <button onClick={()=>{onDelete(post.id);setConfirmDel(false);}}
+                    style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"12px 16px",color:"#c0392b",fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:14,textAlign:"left",display:"flex",alignItems:"center",gap:8}}>
+                    <Icon n="trash" color="#c0392b" size={16}/> Delete Post
+                  </button>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -676,7 +700,7 @@ function ApprovalPanel({pending,onApprove,onDecline,groupId}) {
 }
 
 // ── Feed Screen ───────────────────────────────────────────────────────────────
-function FeedScreen({group,posts,stories,members,myId,onLike,onComment,onPostNew,onStoryNew,onBack,onApprove,onDecline,onDeletePost,onDeleteStory,onChat,onRemoveMember}) {
+function FeedScreen({group,posts,stories,members,myId,onLike,onComment,onPostNew,onStoryNew,onBack,onApprove,onDecline,onDeletePost,onDeleteStory,onChat,onRemoveMember,chats,onSendChat}) {
   const [sv,setSv]=useState(null); const [uploading,setUploading]=useState(false);
   const [viewMember,setViewMember]=useState(null); const [showInfo,setShowInfo]=useState(false);
   const [chatWith,setChatWith]=useState(null);
@@ -694,7 +718,7 @@ function FeedScreen({group,posts,stories,members,myId,onLike,onComment,onPostNew
       {uploading&&<UploadModal groupId={group.id} myId={myId} onClose={()=>setUploading(false)} onPost={onPostNew} onStory={onStoryNew}/>}
       {showInfo&&<GroupInfo group={group} members={members} posts={posts} myId={myId} onClose={()=>setShowInfo(false)} onViewMember={m=>setViewMember(m)} onApprove={onApprove} onDecline={onDecline} onRemoveMember={onRemoveMember}/>}
       {viewMember&&!chatWith&&<MemberProfile member={viewMember} posts={posts} myId={myId} onClose={()=>setViewMember(null)} onChat={m=>{setViewMember(null);setChatWith(m);}}/>}
-      {chatWith&&<PrivateChat me={me} other={chatWith} chats={[]} onSend={()=>{}} onClose={()=>setChatWith(null)}/>}
+      {chatWith&&<PrivateChat me={me} other={chatWith} chats={chats||[]} onSend={onSendChat} onClose={()=>setChatWith(null)}/>}
       <div style={S.topBar}>
         <button onClick={onBack} style={{background:"none",border:"none",cursor:"pointer",padding:4}}><Icon n="back" color={P.primary} size={26}/></button>
         <button onClick={()=>setShowInfo(true)} style={{background:"none",border:"none",cursor:"pointer",fontWeight:800,fontSize:17,color:P.text,fontFamily:"'Nunito',sans-serif",display:"flex",alignItems:"center",gap:8,maxWidth:220,position:"relative"}}>
@@ -1232,22 +1256,24 @@ export default function App() {
 
   const groups=data?.groups||[]; const members=data?.members||[];
   const posts=data?.posts||[];   const stories=data?.stories||[]; const chats=data?.chats||[];
+  // Always use fresh group data from store — prevents stale activeGroup state
+  const liveActiveGroup = activeGroup ? (groups.find(g=>g.id===activeGroup.id)||activeGroup) : null;
 
   return (
     <>
       <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
       <div style={S.app}>
-        {!activeGroup&&(
+        {!liveActiveGroup&&(
           <div style={S.topBar}>
             <Logo height={32}/>
             <span style={{fontSize:13,fontWeight:700,color:P.muted}}>Hi, {myName.split(" ")[0]} 👋</span>
           </div>
         )}
-        {activeGroup?(
-          <FeedScreen group={activeGroup} posts={posts} stories={stories} members={members} myId={myId}
+        {liveActiveGroup?(
+          <FeedScreen group={liveActiveGroup} posts={posts} stories={stories} members={members} myId={myId}
             onLike={like} onComment={comment} onPostNew={newPost} onStoryNew={newStory} onBack={()=>setActiveGroup(null)}
             onApprove={approveMember} onDecline={declineMember} onDeletePost={deletePost} onDeleteStory={deleteStory}
-            onChat={m=>m} onRemoveMember={removeMember}/>
+            onChat={m=>m} onRemoveMember={removeMember} chats={chats} onSendChat={sendChat}/>
         ):tab==="groups"?(
           <GroupsScreen groups={groups} members={members} myId={myId}
             onSelectGroup={g=>setActiveGroup(g)} onCreateGroup={createGroup}
@@ -1256,7 +1282,7 @@ export default function App() {
         ):(
           <ProfileScreen myId={myId} members={members} groups={groups} posts={posts} onSaveProfile={saveProfile} chats={chats} onSendChat={sendChat}/>
         )}
-        {!activeGroup&&(
+        {!liveActiveGroup&&(
           <nav style={S.nav}>
             {[{id:"groups",icon:"people",label:"Groups"},{id:"profile",icon:"profile",label:"Profile"}].map(n=>(
               <button key={n.id} style={S.navBtn(tab===n.id)} onClick={()=>setTab(n.id)}>
