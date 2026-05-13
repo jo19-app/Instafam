@@ -1319,12 +1319,17 @@ export default function App() {
   useEffect(()=>{
     if(!joinCode||!data||!myName) return;
     const group=data.groups.find(g=>g.inviteCode===joinCode);
-    if(!group) return;
-    const alreadyMember=group.members.includes(myId);
-    const alreadyPending=(group.pendingMembers||[]).some(p=>p.id===myId);
-    if(!alreadyMember&&!alreadyPending) {
-      const me=data.members.find(m=>m.id===myId);
-      setData(d=>({...d,groups:d.groups.map(g=>g.id===group.id?{...g,pendingMembers:[...(g.pendingMembers||[]),{id:myId,name:me?.name||myName,avatar:me?.avatar||AVATARS[0],requestedAt:Date.now()}]}:g)}));
+    if(group) {
+      const alreadyMember=group.members.includes(myId);
+      const alreadyPending=(group.pendingMembers||[]).some(p=>p.id===myId);
+      if(!alreadyMember&&!alreadyPending) {
+        const me=data.members.find(m=>m.id===myId);
+        setData(d=>({...d,groups:d.groups.map(g=>g.id===group.id?{...g,pendingMembers:[...(g.pendingMembers||[]),{id:myId,name:me?.name||myName,avatar:me?.avatar||AVATARS[0],requestedAt:Date.now()}]}:g)}));
+      }
+    } else {
+      // Group not in this device's localStorage — store pending invite so user sees waiting screen
+      const groupNameFromUrl=new URLSearchParams(window.location.search).get("group")||"the group";
+      setData(d=>({...d,pendingInvites:[...(d.pendingInvites||[]).filter(i=>i.code!==joinCode),{code:joinCode,groupName:groupNameFromUrl,requestedAt:Date.now()}]}));
     }
     window.history.replaceState({},"",window.location.pathname);
   },[joinCode]);
@@ -1334,22 +1339,69 @@ export default function App() {
 
   function onboard(name) {
     setMyName(name); localStorage.setItem("if_name",name);
-    let base=data;
-    if(!base) { base=seedData(myId,name); }
-    else {
-      const exists=base.members.find(m=>m.id===myId);
-      base={...base,members:exists?base.members.map(m=>m.id===myId?{...m,name}:m):[...base.members,{id:myId,name,avatar:AVATARS[0],nickname:"",age:"",mood:"",hairColour:"",bio:""}]};
+
+    const newMember = {id:myId, name, avatar:AVATARS[0], nickname:"", age:"", mood:"", hairColour:"", bio:""};
+
+    let base = data;
+
+    if (!base) {
+      if (joinCode) {
+        // Brand-new user arriving via invite link — start with EMPTY data,
+        // no seed group, so the invite code lookup below actually finds the group.
+        // The group data will arrive via the shared invite URL's stored state,
+        // but since this is a localStorage-only app with no backend, the invitee
+        // needs the owner to be on the same device or the group must already exist
+        // in their localStorage. We store a pending record keyed by inviteCode
+        // so the owner can approve when they next open the app.
+        base = { groups:[], members:[newMember], posts:[], stories:[], chats:[] };
+      } else {
+        // Fresh install with no invite — show demo seed data
+        base = seedData(myId, name);
+      }
+    } else {
+      // Existing data — update or add member record
+      const exists = base.members.find(m => m.id===myId);
+      base = {
+        ...base,
+        members: exists
+          ? base.members.map(m => m.id===myId ? {...m, name} : m)
+          : [...base.members, newMember],
+      };
     }
-    if(joinCode) {
-      const g=base.groups.find(g=>g.inviteCode===joinCode);
-      const alreadyMember=g?.members.includes(myId);
-      const alreadyPending=(g?.pendingMembers||[]).some(p=>p.id===myId);
-      if(g&&!alreadyMember&&!alreadyPending) {
-        const me=base.members.find(m=>m.id===myId);
-        base={...base,groups:base.groups.map(gr=>gr.inviteCode===joinCode?{...gr,pendingMembers:[...(gr.pendingMembers||[]),{id:myId,name:me?.name||name,avatar:me?.avatar||AVATARS[0],requestedAt:Date.now()}]}:gr)};
+
+    // Process invite: add to pendingMembers of the matching group
+    if (joinCode) {
+      const g = base.groups.find(g => g.inviteCode===joinCode);
+      if (g) {
+        // Group exists in this localStorage — add as pending
+        const alreadyMember  = g.members.includes(myId);
+        const alreadyPending = (g.pendingMembers||[]).some(p => p.id===myId);
+        if (!alreadyMember && !alreadyPending) {
+          base = {
+            ...base,
+            groups: base.groups.map(gr => gr.inviteCode===joinCode
+              ? {...gr, pendingMembers:[...(gr.pendingMembers||[]), {id:myId, name, avatar:AVATARS[0], requestedAt:Date.now()}]}
+              : gr
+            ),
+          };
+        }
+      } else {
+        // Group not in localStorage yet (owner is on a different device).
+        // Store the pending invite so we can show the user a waiting screen
+        // and the owner can find them when they next open the app.
+        // We embed the invite details in a pendingInvites list.
+        const groupNameFromUrl = new URLSearchParams(window.location.search).get("group") || "the group";
+        base = {
+          ...base,
+          pendingInvites: [
+            ...(base.pendingInvites||[]).filter(i => i.code !== joinCode),
+            { code:joinCode, groupName:groupNameFromUrl, requestedAt:Date.now() },
+          ],
+        };
       }
     }
-    window.history.replaceState({},"",window.location.pathname);
+
+    window.history.replaceState({}, "", window.location.pathname);
     setData(base);
   }
 
@@ -1422,9 +1474,11 @@ export default function App() {
 
   if(!myName) return (<><link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/><Onboarding onDone={onboard} joinCode={joinCode} joinGroupName={joinGroupName}/></>);
 
-  const pendingInGroup=(data?.groups||[]).find(g=>(g.pendingMembers||[]).some(p=>p.id===myId)&&!g.members.includes(myId));
-  const hasAnyApprovedGroup=(data?.groups||[]).some(g=>g.members.includes(myId));
-  if(pendingInGroup&&!hasAnyApprovedGroup) return (<><link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/><PendingBanner groupName={pendingInGroup.name}/></>);
+  const pendingInGroup = (data?.groups||[]).find(g=>(g.pendingMembers||[]).some(p=>p.id===myId)&&!g.members.includes(myId));
+  const pendingInvite  = (data?.pendingInvites||[])[0]; // cross-device invite not yet in localStorage
+  const hasAnyApprovedGroup = (data?.groups||[]).some(g=>g.members.includes(myId));
+  const pendingGroupName = pendingInGroup?.name || pendingInvite?.groupName;
+  if(pendingGroupName && !hasAnyApprovedGroup) return (<><link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/><PendingBanner groupName={pendingGroupName}/></>);
 
   const groups=data?.groups||[]; const members=data?.members||[];
   const posts=data?.posts||[];   const stories=data?.stories||[]; const chats=data?.chats||[];
