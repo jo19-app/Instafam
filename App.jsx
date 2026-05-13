@@ -202,147 +202,249 @@ function StoryViewer({story,author,onClose,canDelete,onDelete}) {
   );
 }
 
-// ── Image Editor ──────────────────────────────────────────────────────────────
+// ── Image Editor ─────────────────────────────────────────────────────────────
+// Full drag (touch + mouse), bin zone, filters, text, stickers
 function ImageEditor({image,onSave,onCancel}) {
-  const canvasRef=useRef(); const [filter,setFilter]=useState(0); const [texts,setTexts]=useState([]);
-  const [stickers,setStickers]=useState([]); const [addingText,setAddingText]=useState(false); const [textVal,setTextVal]=useState("");
-  const [textColor,setTextColor]=useState("#ffffff"); const [dragging,setDragging]=useState(null);
-  const [dragOffset,setDragOffset]=useState({x:0,y:0});
+  const canvasRef  = useRef();
+  const containerRef = useRef();
+  const [filter,setFilter]   = useState(0);
+  const [items,setItems]     = useState([]); // [{id,type:"text"|"sticker",content,x,y,color,size}]
+  const [addingText,setAddingText] = useState(false);
+  const [textVal,setTextVal] = useState("");
+  const [textColor,setTextColor] = useState("#ffffff");
+  const [draggingId,setDraggingId]   = useState(null);
+  const [overBin,setOverBin]         = useState(false);
+  const dragStart = useRef({mx:0,my:0,ix:0,iy:0});
 
-  function addText() { if(!textVal.trim()) return; setTexts(t=>[...t,{id:uid(),text:textVal,x:50,y:50,color:textColor,size:24}]); setTextVal(""); setAddingText(false); }
-  function addSticker(s) { setStickers(st=>[...st,{id:uid(),emoji:s,x:50,y:50,size:40}]); }
-  function removeItem(type,id) {
-    if(type==="text") setTexts(t=>t.filter(i=>i.id!==id));
-    else setStickers(s=>s.filter(i=>i.id!==id));
+  // ── Pointer helpers ────────────────────────────────────────────────────────
+  function clientPos(e) {
+    if(e.touches&&e.touches.length>0) return {x:e.touches[0].clientX, y:e.touches[0].clientY};
+    return {x:e.clientX, y:e.clientY};
   }
 
-  // Flatten to canvas and export
-  function exportImage() {
-    const c=canvasRef.current;
-    const doRender=(imgEl)=>{
-      c.width=imgEl.naturalWidth||imgEl.width||800;
-      c.height=imgEl.naturalHeight||imgEl.height||800;
-      const ctx=c.getContext("2d");
-      ctx.filter=FILTERS[filter].css==="none"?"none":FILTERS[filter].css;
-      ctx.drawImage(imgEl,0,0);
-      ctx.filter="none";
-      stickers.forEach(s=>{
-        ctx.font=`${s.size*c.width/400}px serif`;
-        ctx.fillText(s.emoji,(s.x/100)*c.width,(s.y/100)*c.height);
-      });
-      texts.forEach(t=>{
-        const fs=t.size*c.width/400;
-        ctx.font=`bold ${fs}px 'Nunito',sans-serif`;
-        ctx.fillStyle=t.color;
-        ctx.strokeStyle="rgba(0,0,0,0.5)"; ctx.lineWidth=fs*0.08;
-        ctx.strokeText(t.text,(t.x/100)*c.width,(t.y/100)*c.height);
-        ctx.fillText(t.text,(t.x/100)*c.width,(t.y/100)*c.height);
-      });
-      try { onSave(c.toDataURL("image/jpeg",0.92)); }
-      catch(e) {
-        // CORS tainted canvas — no text/stickers added, just return original with filter note
-        onSave(image);
-      }
-    };
-    // For base64 data URIs (camera/library picks) — no CORS issue
-    if(image.startsWith("data:")) {
-      const img=new Image();
-      img.onload=()=>doRender(img);
-      img.src=image;
-      return;
+  function startDrag(e,id) {
+    e.stopPropagation();
+    e.preventDefault();
+    const {x,y} = clientPos(e);
+    const item = items.find(i=>i.id===id);
+    if(!item) return;
+    dragStart.current = {mx:x, my:y, ix:item.x, iy:item.y};
+    setDraggingId(id);
+  }
+
+  function onMove(e) {
+    if(!draggingId) return;
+    e.preventDefault();
+    const {x,y} = clientPos(e);
+    const box = containerRef.current?.getBoundingClientRect();
+    if(!box) return;
+    const dx = x - dragStart.current.mx;
+    const dy = y - dragStart.current.my;
+    const newX = Math.max(0, Math.min(100, dragStart.current.ix + (dx/box.width)*100));
+    const newY = Math.max(0, Math.min(100, dragStart.current.iy + (dy/box.height)*100));
+    setItems(its => its.map(i => i.id===draggingId ? {...i,x:newX,y:newY} : i));
+    // Check if over bin (bottom-center zone)
+    const binY = box.bottom - 60;
+    const binXL = box.left  + box.width*0.35;
+    const binXR = box.right - box.width*0.35;
+    setOverBin(y > binY && x > binXL && x < binXR);
+  }
+
+  function endDrag(e) {
+    if(!draggingId) return;
+    if(overBin) {
+      setItems(its => its.filter(i => i.id!==draggingId));
     }
-    // For external URLs — try with crossOrigin, fall back gracefully
-    const img=new Image();
-    img.crossOrigin="anonymous";
-    img.onload=()=>doRender(img);
-    img.onerror=()=>{
-      // CORS blocked — return original image unchanged
-      onSave(image);
-    };
-    img.src=image;
+    setDraggingId(null);
+    setOverBin(false);
   }
 
-  const previewStyle={width:"100%",maxHeight:340,objectFit:"contain",display:"block",filter:FILTERS[filter].css,borderRadius:12,userSelect:"none"};
+  // ── Add items ──────────────────────────────────────────────────────────────
+  function addText() {
+    if(!textVal.trim()) return;
+    setItems(its=>[...its,{id:uid(),type:"text",content:textVal,x:50,y:40,color:textColor,size:24}]);
+    setTextVal(""); setAddingText(false);
+  }
+  function addSticker(emoji) {
+    setItems(its=>[...its,{id:uid(),type:"sticker",content:emoji,x:50,y:40,size:40}]);
+  }
+
+  // ── Export ─────────────────────────────────────────────────────────────────
+  function exportImage() {
+    const c = canvasRef.current;
+    function render(imgEl) {
+      c.width  = imgEl.naturalWidth  || 800;
+      c.height = imgEl.naturalHeight || 800;
+      const ctx = c.getContext("2d");
+      ctx.filter = FILTERS[filter].css === "none" ? "none" : FILTERS[filter].css;
+      ctx.drawImage(imgEl, 0, 0);
+      ctx.filter = "none";
+      items.forEach(item => {
+        const px = (item.x/100)*c.width;
+        const py = (item.y/100)*c.height;
+        if(item.type==="sticker") {
+          ctx.font = `${item.size * c.width/400}px serif`;
+          ctx.fillText(item.content, px, py);
+        } else {
+          const fs = item.size * c.width/400;
+          ctx.font = `bold ${fs}px sans-serif`;
+          ctx.fillStyle   = item.color;
+          ctx.strokeStyle = "rgba(0,0,0,0.55)";
+          ctx.lineWidth   = fs * 0.08;
+          ctx.strokeText(item.content, px, py);
+          ctx.fillText(item.content, px, py);
+        }
+      });
+      try { onSave(c.toDataURL("image/jpeg", 0.92)); }
+      catch { onSave(image); }
+    }
+    if(image.startsWith("data:")) {
+      const img = new Image(); img.onload = ()=>render(img); img.src = image;
+    } else {
+      const img = new Image(); img.crossOrigin = "anonymous";
+      img.onload  = ()=>render(img);
+      img.onerror = ()=>onSave(image);
+      img.src = image;
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  const imgStyle = {
+    width:"100%", display:"block", borderRadius:10,
+    filter: FILTERS[filter].css, userSelect:"none", pointerEvents:"none",
+    WebkitUserSelect:"none",
+  };
 
   return (
-    <div style={{position:"fixed",inset:0,zIndex:600,background:"#111",display:"flex",flexDirection:"column"}}>
+    <div style={{position:"fixed",inset:0,zIndex:600,background:"#111",display:"flex",flexDirection:"column",touchAction:"none"}}
+      onMouseMove={onMove} onMouseUp={endDrag}
+      onTouchMove={onMove} onTouchEnd={endDrag}>
       <canvas ref={canvasRef} style={{display:"none"}}/>
+
       {/* Top bar */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:"rgba(0,0,0,0.7)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:"rgba(0,0,0,0.75)",flexShrink:0}}>
         <button onClick={onCancel} style={{background:"none",border:"none",cursor:"pointer",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:14}}>Cancel</button>
-        <span style={{color:"#fff",fontWeight:800,fontSize:16}}>✏️ Edit</span>
+        <span style={{color:"#fff",fontWeight:800,fontSize:16}}>✏️ Edit Photo</span>
         <button onClick={exportImage} style={{...S.btn,padding:"7px 18px",fontSize:13}}>Done</button>
       </div>
 
-      {/* Image preview with overlays */}
-      <div style={{flex:1,overflowY:"auto",padding:"8px 12px 0",position:"relative"}}>
-        <div style={{position:"relative",display:"inline-block",width:"100%"}}>
-          <img src={image} style={previewStyle} alt="edit" draggable={false}/>
-          {/* Overlay stickers */}
-          {stickers.map(s=>(
-            <div key={s.id} style={{position:"absolute",left:`${s.x}%`,top:`${s.y}%`,fontSize:s.size,cursor:"move",userSelect:"none",transform:"translate(-50%,-50%)",lineHeight:1}}
-              onDoubleClick={()=>removeItem("sticker",s.id)}>
-              {s.emoji}
+      {/* Scrollable content */}
+      <div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column"}}>
+
+        {/* Canvas area — touch/drag zone */}
+        <div ref={containerRef} style={{position:"relative",margin:"10px 12px 0",borderRadius:12,overflow:"hidden",flexShrink:0}}>
+          <img src={image} alt="edit" style={imgStyle} draggable={false}/>
+
+          {/* Draggable items */}
+          {items.map(item=>(
+            <div key={item.id}
+              style={{
+                position:"absolute",
+                left:`${item.x}%`, top:`${item.y}%`,
+                transform:"translate(-50%,-50%)",
+                cursor: draggingId===item.id?"grabbing":"grab",
+                userSelect:"none", WebkitUserSelect:"none",
+                fontSize: item.type==="sticker" ? item.size : item.size,
+                color: item.type==="text" ? item.color : undefined,
+                fontWeight: item.type==="text" ? 800 : undefined,
+                textShadow: item.type==="text" ? "0 1px 6px rgba(0,0,0,0.8)" : undefined,
+                whiteSpace:"nowrap",
+                lineHeight:1,
+                zIndex: draggingId===item.id ? 20 : 10,
+                opacity: draggingId===item.id && overBin ? 0.4 : 1,
+                transition: "opacity 0.15s",
+                WebkitTouchCallout:"none",
+              }}
+              onMouseDown={e=>startDrag(e,item.id)}
+              onTouchStart={e=>startDrag(e,item.id)}
+            >
+              {item.content}
             </div>
           ))}
-          {/* Overlay texts */}
-          {texts.map(t=>(
-            <div key={t.id} style={{position:"absolute",left:`${t.x}%`,top:`${t.y}%`,color:t.color,fontWeight:800,fontSize:t.size,textShadow:"0 1px 4px rgba(0,0,0,0.7)",cursor:"move",userSelect:"none",transform:"translate(-50%,-50%)",whiteSpace:"nowrap"}}
-              onDoubleClick={()=>removeItem("text",t.id)}>
-              {t.text}
+
+          {/* Bin zone — appears at bottom when dragging */}
+          {draggingId&&(
+            <div style={{
+              position:"absolute",bottom:0,left:"50%",transform:"translateX(-50%)",
+              width:"30%",padding:"10px 0",borderRadius:"12px 12px 0 0",
+              background: overBin?"rgba(192,57,43,0.85)":"rgba(0,0,0,0.55)",
+              display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+              transition:"background 0.15s",zIndex:30,
+            }}>
+              <span style={{fontSize:22}}>🗑</span>
+              <span style={{color:"#fff",fontSize:10,fontWeight:700}}>{overBin?"Release to remove":"Drag here"}</span>
             </div>
-          ))}
+          )}
         </div>
-        <p style={{color:"rgba(255,255,255,0.4)",fontSize:11,textAlign:"center",margin:"4px 0 8px"}}>Double-tap any text or sticker to remove</p>
+
+        <p style={{color:"rgba(255,255,255,0.35)",fontSize:11,textAlign:"center",margin:"6px 0 4px"}}>
+          Drag items to move · drop on 🗑 to remove
+        </p>
 
         {/* Add text panel */}
         {addingText&&(
-          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:14,padding:14,marginBottom:10}}>
-            <input value={textVal} onChange={e=>setTextVal(e.target.value)} placeholder="Type your text…" autoFocus
+          <div style={{background:"rgba(255,255,255,0.08)",borderRadius:14,padding:14,margin:"0 12px 10px"}}>
+            <input value={textVal} onChange={e=>setTextVal(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&addText()}
+              placeholder="Type your text…" autoFocus
               style={{...S.input,background:"rgba(255,255,255,0.15)",color:"#fff",border:"1.5px solid rgba(255,255,255,0.2)",marginBottom:10}}/>
             <div style={{display:"flex",gap:8,marginBottom:10}}>
-              {["#ffffff","#ffcc00","#ff4444","#44ff88","#44aaff","#ff44cc"].map(c=>(
-                <button key={c} onClick={()=>setTextColor(c)} style={{width:28,height:28,borderRadius:"50%",background:c,border:`3px solid ${textColor===c?"#fff":"transparent"}`,cursor:"pointer",flexShrink:0}}/>
+              {["#ffffff","#ffcc00","#ff4444","#44ff88","#44aaff","#ff44cc","#000000"].map(c=>(
+                <button key={c} onClick={()=>setTextColor(c)}
+                  style={{width:28,height:28,borderRadius:"50%",background:c,
+                    border:`3px solid ${textColor===c?"#fff":"transparent"}`,
+                    cursor:"pointer",flexShrink:0,boxShadow:textColor===c?"0 0 0 2px rgba(255,255,255,0.3)":"none"}}/>
               ))}
             </div>
             <div style={{display:"flex",gap:8}}>
-              <button onClick={addText} style={{...S.btn,flex:1,fontSize:13,padding:"8px 0"}}>Add</button>
-              <button onClick={()=>setAddingText(false)} style={{...S.ghost,flex:1,fontSize:13,padding:"8px 0",color:"#fff",borderColor:"rgba(255,255,255,0.3)"}}>Cancel</button>
+              <button onClick={addText} style={{...S.btn,flex:1,fontSize:13,padding:"8px 0"}}>Add Text</button>
+              <button onClick={()=>setAddingText(false)} style={{background:"rgba(255,255,255,0.1)",color:"#fff",border:"1px solid rgba(255,255,255,0.2)",borderRadius:24,padding:"8px 0",flex:1,cursor:"pointer",fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:13}}>Cancel</button>
             </div>
           </div>
         )}
 
         {/* Filters */}
-        <div style={{marginBottom:12}}>
-          <p style={{color:"rgba(255,255,255,0.7)",fontSize:12,fontWeight:700,marginBottom:8}}>FILTERS</p>
+        <div style={{padding:"0 12px",marginBottom:10}}>
+          <p style={{color:"rgba(255,255,255,0.6)",fontSize:11,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:0.5}}>Filters</p>
           <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,scrollbarWidth:"none"}}>
             {FILTERS.map((f,i)=>(
               <button key={f.name} onClick={()=>setFilter(i)}
-                style={{background:"none",border:`2px solid ${filter===i?P.primary:"rgba(255,255,255,0.2)"}`,borderRadius:10,padding:"4px 6px",cursor:"pointer",flexShrink:0,textAlign:"center"}}>
-                <div style={{width:52,height:52,borderRadius:6,overflow:"hidden",marginBottom:4}}>
-                  <img src={image} style={{width:"100%",height:"100%",objectFit:"cover",filter:f.css}} alt={f.name}/>
+                style={{background:"none",border:`2px solid ${filter===i?P.primary:"rgba(255,255,255,0.2)"}`,
+                  borderRadius:10,padding:"4px 6px",cursor:"pointer",flexShrink:0,textAlign:"center"}}>
+                <div style={{width:50,height:50,borderRadius:6,overflow:"hidden",marginBottom:3}}>
+                  <img src={image} style={{width:"100%",height:"100%",objectFit:"cover",filter:f.css}} alt={f.name} draggable={false}/>
                 </div>
-                <span style={{color:filter===i?P.primary:"rgba(255,255,255,0.7)",fontSize:10,fontWeight:700}}>{f.name}</span>
+                <span style={{color:filter===i?P.primary:"rgba(255,255,255,0.65)",fontSize:10,fontWeight:700}}>{f.name}</span>
               </button>
             ))}
           </div>
         </div>
 
-        {/* Toolbar */}
-        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-          <button onClick={()=>setAddingText(true)} style={{background:"rgba(255,255,255,0.12)",border:"1.5px solid rgba(255,255,255,0.2)",borderRadius:20,padding:"8px 14px",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
-            <Icon n="text" color="#fff" size={16}/> Text
-          </button>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {/* Toolbar — text + stickers */}
+        <div style={{padding:"0 12px",marginBottom:20}}>
+          <p style={{color:"rgba(255,255,255,0.6)",fontSize:11,fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:0.5}}>Add</p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <button onClick={()=>setAddingText(true)}
+              style={{background:"rgba(255,255,255,0.12)",border:"1.5px solid rgba(255,255,255,0.2)",
+                borderRadius:20,padding:"8px 14px",color:"#fff",fontFamily:"'Nunito',sans-serif",
+                fontWeight:700,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+              <Icon n="text" color="#fff" size={15}/> Text
+            </button>
             {STICKERS.map(s=>(
-              <button key={s} onClick={()=>addSticker(s)} style={{background:"rgba(255,255,255,0.08)",border:"1.5px solid rgba(255,255,255,0.15)",borderRadius:10,padding:"6px 8px",fontSize:20,cursor:"pointer",lineHeight:1}}>{s}</button>
+              <button key={s} onClick={()=>addSticker(s)}
+                style={{background:"rgba(255,255,255,0.08)",border:"1.5px solid rgba(255,255,255,0.15)",
+                  borderRadius:10,padding:"6px 8px",fontSize:20,cursor:"pointer",lineHeight:1}}>
+                {s}
+              </button>
             ))}
           </div>
         </div>
+
       </div>
     </div>
   );
 }
+
 
 // ── Image Picker ──────────────────────────────────────────────────────────────
 function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
@@ -954,10 +1056,9 @@ function ProfileScreen({myId,members,groups,posts,onSaveProfile,chats,onSendChat
 function GroupsScreen({groups,members,myId,onSelectGroup,onCreateGroup,onRenameGroup,onDeleteGroup,onGroupPicture,onApprove,onDecline}) {
   const [creating,setCreating]=useState(false); const [newName,setNewName]=useState("");
   const [editState,setEditState]=useState({}); const [shareModal,setShareModal]=useState(null);
-  const picRefs=useRef({});
+  const [picGroupId,setPicGroupId]=useState(null); // which group is having its picture changed
   const me=members.find(m=>m.id===myId);
 
-  async function handlePicChange(gId,e) { const f=e.target.files?.[0]; if(!f) return; try{const d=await readFile(f);onGroupPicture(gId,d);}catch{} e.target.value=""; }
   function create() { if(!newName.trim()) return; onCreateGroup(newName.trim()); setNewName(""); setCreating(false); }
   function startRename(g) { setEditState(s=>({...s,[g.id]:{mode:"rename",val:g.name}})); }
   function cancelEdit(id) { setEditState(s=>{const n={...s};delete n[id];return n;}); }
@@ -971,9 +1072,18 @@ function GroupsScreen({groups,members,myId,onSelectGroup,onCreateGroup,onRenameG
   return (
     <div style={{padding:"16px 16px 100px"}}>
       {shareModal&&<ShareInviteModal group={shareModal} senderName={me?.name||"Someone"} onClose={()=>setShareModal(null)}/>}
-      {groups.map(g=>g.createdBy===myId&&(
-        <input key={g.id} type="file" accept="image/*" ref={el=>picRefs.current[g.id]=el} onChange={e=>handlePicChange(g.id,e)} style={{display:"none"}}/>
-      ))}
+      {picGroupId&&(
+        <div style={{position:"fixed",inset:0,zIndex:600,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"flex-end"}}>
+          <div style={{background:P.bg,borderRadius:"24px 24px 0 0",width:"100%",maxWidth:480,margin:"0 auto",padding:24,paddingBottom:"env(safe-area-inset-bottom,24px)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <div style={{fontWeight:900,fontSize:18,color:P.text}}>Group Photo</div>
+              <button onClick={()=>setPicGroupId(null)} style={{background:"none",border:"none",cursor:"pointer"}}><Icon n="close" color={P.muted}/></button>
+            </div>
+            <ImagePicker label="Choose Group Photo" onPick={d=>{onGroupPicture(picGroupId,d);setPicGroupId(null);}}/>
+          </div>
+        </div>
+      )}
+
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
         <h2 style={{margin:0,fontSize:22,fontWeight:900}}>Your Groups</h2>
         <button onClick={()=>setCreating(!creating)} style={S.btn}>+ New Group</button>
@@ -1017,7 +1127,7 @@ function GroupsScreen({groups,members,myId,onSelectGroup,onCreateGroup,onRenameG
             {isOwner&&<ApprovalPanel pending={g.pendingMembers||[]} onApprove={onApprove} onDecline={onDecline} groupId={g.id}/>}
             <div style={{padding:"16px 16px 12px",cursor:"pointer"}} onClick={()=>onSelectGroup(g)}>
               <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                <div style={{width:56,height:56,borderRadius:16,overflow:"hidden",flexShrink:0,position:"relative",cursor:isOwner?"pointer":"default"}} onClick={isOwner?e=>{e.stopPropagation();picRefs.current[g.id]?.click();}:undefined}>
+                <div style={{width:56,height:56,borderRadius:16,overflow:"hidden",flexShrink:0,position:"relative",cursor:isOwner?"pointer":"default"}} onClick={isOwner?e=>{e.stopPropagation();setPicGroupId(g.id);}:undefined}>
                   {g.picture?<img src={g.picture} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="group"/>
                     :<div style={{width:"100%",height:"100%",background:`linear-gradient(135deg,${P.primary},${P.dark})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{g.emoji||"👨‍👩‍👧‍👦"}</div>}
                   {isOwner&&<div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.28)",display:"flex",alignItems:"center",justifyContent:"center",opacity:0,transition:"opacity 0.2s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}><Icon n="camera" color="#fff" size={18}/></div>}
