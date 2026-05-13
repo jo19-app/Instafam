@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const P = {
@@ -492,6 +491,7 @@ function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
       }}>
         <Icon n="camera" color={P.primary} size={30}/>
         <span style={{fontWeight:700,fontSize:15,color:P.primary}}>{label}</span>
+        <span style={{fontSize:12,color:P.muted}}>📷 Camera also available in the picker</span>
         {hint&&<span style={{fontSize:12,color:P.muted}}>{hint}</span>}
       </div>
     </label>
