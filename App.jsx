@@ -447,12 +447,10 @@ function ImageEditor({image,onSave,onCancel}) {
 
 
 // ── Image Picker ──────────────────────────────────────────────────────────────
-// Uses a <label> wrapping a visible-but-transparent <input type="file">.
-// The input sits on top of the styled label via position:absolute + opacity:0.
-// This means the user's tap directly activates the input — no .click() call,
-// which is what iOS Safari blocks inside modals and async handlers.
+// The <input type="file"> is rendered at full size, opacity:0, on top of the
+// styled div — both inside a position:relative wrapper. The user's finger
+// lands directly on the invisible input. No programmatic .click() anywhere.
 function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
-  const inputId = useRef("fp-" + Math.random().toString(36).slice(2));
   async function handle(e) {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -460,41 +458,39 @@ function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
       const d = await readFile(f);
       onPick(d);
     } catch(err) {
-      console.error("ImagePicker read error:", err);
+      console.error("ImagePicker error:", err);
     }
-    // Reset value so picking the same file again triggers onChange
     e.target.value = "";
   }
   return (
-    <label htmlFor={inputId.current} style={{display:"block",cursor:"pointer",marginBottom:0}}>
-      {/* The actual input — invisible but on top so taps land on it directly */}
+    <div style={{position:"relative",width:"100%",borderRadius:16,overflow:"hidden",marginBottom:0}}>
+      {/* Visible styled layer */}
+      <div style={{
+        width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,
+        padding:"24px 16px",background:`${P.primary}08`,
+        display:"flex",flexDirection:"column",alignItems:"center",gap:8,
+      }}>
+        <Icon n="camera" color={P.primary} size={30}/>
+        <span style={{fontWeight:700,fontSize:15,color:P.primary}}>{label}</span>
+        <span style={{fontSize:12,color:P.muted}}>Camera also available once picker opens</span>
+        {hint&&<span style={{fontSize:12,color:P.muted}}>{hint}</span>}
+      </div>
+      {/* Invisible input stretched over the entire button — direct tap target */}
       <input
-        id={inputId.current}
         type="file"
         accept="image/*"
         onChange={handle}
         style={{
           position:"absolute",
-          width:1, height:1,
+          inset:0,
+          width:"100%",
+          height:"100%",
           opacity:0,
-          overflow:"hidden",
-          clip:"rect(0 0 0 0)",
-          whiteSpace:"nowrap",
+          cursor:"pointer",
+          fontSize:0,
         }}
       />
-      {/* Styled button appearance — pointer-events:none so taps pass through to input */}
-      <div style={{
-        width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,
-        padding:"24px 16px",background:`${P.primary}08`,
-        display:"flex",flexDirection:"column",alignItems:"center",gap:8,
-        pointerEvents:"none",
-      }}>
-        <Icon n="camera" color={P.primary} size={30}/>
-        <span style={{fontWeight:700,fontSize:15,color:P.primary}}>{label}</span>
-        <span style={{fontSize:12,color:P.muted}}>📷 Camera also available in the picker</span>
-        {hint&&<span style={{fontSize:12,color:P.muted}}>{hint}</span>}
-      </div>
-    </label>
+    </div>
   );
 }
 
