@@ -447,25 +447,53 @@ function ImageEditor({image,onSave,onCancel}) {
 
 
 // ── Image Picker ──────────────────────────────────────────────────────────────
+// Uses a <label> wrapping a visible-but-transparent <input type="file">.
+// The input sits on top of the styled label via position:absolute + opacity:0.
+// This means the user's tap directly activates the input — no .click() call,
+// which is what iOS Safari blocks inside modals and async handlers.
 function ImagePicker({onPick,label="Choose from Photo Library",hint=""}) {
-  const fileRef=useRef();
+  const inputId = useRef("fp-" + Math.random().toString(36).slice(2));
   async function handle(e) {
-    const f=e.target.files?.[0]; if(!f) return;
-    try{ const d=await readFile(f); onPick(d); } catch(err){ console.error("File read error",err); }
-    // Reset so same file can be re-selected
-    e.target.value="";
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const d = await readFile(f);
+      onPick(d);
+    } catch(err) {
+      console.error("ImagePicker read error:", err);
+    }
+    // Reset value so picking the same file again triggers onChange
+    e.target.value = "";
   }
   return (
-    <div>
-      {/* Single input — no capture attr so iOS/Android show native picker with both options */}
-      <input ref={fileRef} type="file" accept="image/*" onChange={handle} style={{display:"none"}}/>
-      <button onClick={()=>{if(fileRef.current){fileRef.current.value="";fileRef.current.click();}}}
-        style={{width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,padding:"24px 16px",cursor:"pointer",background:`${P.primary}08`,display:"flex",flexDirection:"column",alignItems:"center",gap:8,marginBottom:0}}>
+    <label htmlFor={inputId.current} style={{display:"block",cursor:"pointer",marginBottom:0}}>
+      {/* The actual input — invisible but on top so taps land on it directly */}
+      <input
+        id={inputId.current}
+        type="file"
+        accept="image/*"
+        onChange={handle}
+        style={{
+          position:"absolute",
+          width:1, height:1,
+          opacity:0,
+          overflow:"hidden",
+          clip:"rect(0 0 0 0)",
+          whiteSpace:"nowrap",
+        }}
+      />
+      {/* Styled button appearance — pointer-events:none so taps pass through to input */}
+      <div style={{
+        width:"100%",border:`2px dashed ${P.primary}`,borderRadius:16,
+        padding:"24px 16px",background:`${P.primary}08`,
+        display:"flex",flexDirection:"column",alignItems:"center",gap:8,
+        pointerEvents:"none",
+      }}>
         <Icon n="camera" color={P.primary} size={30}/>
         <span style={{fontWeight:700,fontSize:15,color:P.primary}}>{label}</span>
         {hint&&<span style={{fontSize:12,color:P.muted}}>{hint}</span>}
-      </button>
-    </div>
+      </div>
+    </label>
   );
 }
 
